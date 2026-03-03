@@ -8,7 +8,9 @@ import ROUTES from "@/constants/routes";
 
 import NavLinks from "./navbar/NavLinks";
 import { Button } from "../ui/button";
-import { auth, signOut } from "../../../auth";
+import { auth, signOut } from "@/auth";
+
+
 
 const LeftSidebar = async () => {
   const session = await auth();

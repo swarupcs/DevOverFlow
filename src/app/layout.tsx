@@ -1,6 +1,6 @@
+import "./globals.css";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
 import localFont from "next/font/local";
 import { SessionProvider } from "next-auth/react";
 import { ReactNode } from "react";
@@ -9,7 +9,7 @@ import ThemeProvider from "@/context/Theme";
 
 import { Toaster } from "sonner";
 // import { async } from "./../node_modules/@auth/core/jwt";
-import { auth } from "../../auth";
+import { auth } from "@/auth";
 
 const inter = localFont({
   src: "./fonts/InterVF.ttf",

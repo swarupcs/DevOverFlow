@@ -8,7 +8,7 @@ import ROUTES from "@/constants/routes";
 
 import MobileNavigation from "./MobileNavigation";
 import Theme from "./Theme";
-import { auth } from "../../../../auth";
+import { auth } from "@/auth";
 
 const Navbar = async () => {
   const session = await auth();

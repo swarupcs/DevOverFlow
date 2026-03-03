@@ -21,7 +21,7 @@ import {
   getUserStats,
   getUserTopTags,
 } from "@/lib/actions/user.action";
-import { auth } from "../../../../../auth";
+import { auth } from "@/auth";
 
 const ProfilePage = async ({ params, searchParams }: RouteParams) => {
   const { id } = await params;

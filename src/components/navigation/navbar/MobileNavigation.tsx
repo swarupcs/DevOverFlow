@@ -14,7 +14,7 @@ import {
 import ROUTES from "@/constants/routes";
 
 import NavLinks from "./NavLinks";
-import { auth, signOut } from "../../../../auth";
+import { auth, signOut } from "@/auth";
 
 const MobileNavigation = async () => {
   const session = await auth();

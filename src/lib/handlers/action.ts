@@ -7,7 +7,7 @@ import { ZodError, ZodSchema } from "zod";
 
 import { UnauthorizedError, ValidationError } from "../http-errors";
 import dbConnect from "../mongoose";
-import { auth } from "../../../auth";
+import { auth } from "@/auth";
 
 type ActionOptions<T> = {
   params?: T;

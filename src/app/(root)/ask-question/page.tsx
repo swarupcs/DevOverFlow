@@ -3,7 +3,7 @@ import React from "react";
 
 
 import QuestionForm from "@/components/forms/QuestionForm";
-import { auth } from "../../../../auth";
+import { auth } from "@/auth";
 
 const AskQuestion = async () => {
   const session = await auth();

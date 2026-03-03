@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import ProfileForm from "@/components/forms/ProfileForm";
 import ROUTES from "@/constants/routes";
 import { getUser } from "@/lib/actions/user.action";
-import { auth } from "../../../../../auth";
+import { auth } from "@/auth";
 
 const Page = async () => {
   const session = await auth();

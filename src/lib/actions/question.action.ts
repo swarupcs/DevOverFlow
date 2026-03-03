@@ -23,7 +23,7 @@ import {
 import dbConnect from "../mongoose";
 import { createInteraction } from "./interaction.action";
 import { cache } from "react";
-import { auth } from "../../../auth";
+import { auth } from "@/auth";
 
 export async function createQuestion(
   params: CreateQuestionParams
