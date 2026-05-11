@@ -1380,3 +1380,735 @@ The profile page shows user questions and answers but provides no sorting option
 
 ### Expected Behavior
 Add sort criteria to profile queries and provide UI filters on the profile tabs.
+
+
+
+---
+
+## Issue #61: Bug - Missing middleware.ts File Means No Route Protection
+
+**Priority:** High  
+**Labels:** security, authentication, architecture  
+**Affected Files:** Root directory (missing `middleware.ts`), `proxy.ts`
+
+### Description
+There is no `middleware.ts` file in the project, which means there's no server-side route protection. Protected routes like `/ask-question`, `/collection`, `/profile/edit` are only protected by client-side checks (redirecting in the page component after `auth()` call). A `proxy.ts` file exists at the root but is not recognized by Next.js as middleware.
+
+### Current Behavior
+- Protected pages render on the server, call `auth()`, then redirect if unauthenticated
+- This means the page component still executes server-side logic before redirecting
+- There's no way to protect API routes or static assets at the middleware level
+- The `proxy.ts` file exports `auth` but is never used by Next.js
+
+### Expected Behavior
+Create a proper `middleware.ts` (or rename `proxy.ts`) that:
+1. Protects authenticated routes at the edge before page rendering
+2. Redirects unauthenticated users to sign-in
+3. Optionally protects API routes
+
+```typescript
+// middleware.ts
+import { auth } from "@/auth";
+
+export default auth((req) => {
+  const isAuthenticated = !!req.auth;
+  const protectedRoutes = ["/ask-question", "/collection", "/profile/edit"];
+  
+  if (!isAuthenticated && protectedRoutes.some(route => req.nextUrl.pathname.startsWith(route))) {
+    return Response.redirect(new URL("/sign-in", req.url));
+  }
+});
+
+export const config = {
+  matcher: ["/ask-question", "/collection", "/profile/edit"],
+};
+```
+
+---
+
+## Issue #62: Bug - fetchLocation and fetchJobs Have No Error Handling
+
+**Priority:** High  
+**Labels:** bug, error-handling, reliability  
+**Affected Files:** `src/lib/actions/job.action.ts`
+
+### Description
+The `fetchLocation` and `fetchJobs` functions make external API calls without any error handling. If the API is down, the response is not ok, or the network fails, these functions will throw unhandled errors that crash the Jobs page.
+
+### Current Behavior
+```typescript
+export const fetchLocation = async () => {
+  const response = await fetch("http://ip-api.com/json/?fields=country");
+  const location = await response.json(); // No check if response.ok
+  return location.country;
+};
+
+export const fetchJobs = async (filters: JobFilterParams) => {
+  const response = await fetch(...);
+  const result = await response.json(); // No check if response.ok
+  return result.data; // result.data could be undefined
+};
+```
+
+### Expected Behavior
+```typescript
+export const fetchLocation = async () => {
+  try {
+    const response = await fetch("http://ip-api.com/json/?fields=country");
+    if (!response.ok) return undefined;
+    const location = await response.json();
+    return location.country;
+  } catch {
+    return undefined;
+  }
+};
+
+export const fetchJobs = async (filters: JobFilterParams) => {
+  try {
+    const response = await fetch(...);
+    if (!response.ok) return [];
+    const result = await response.json();
+    return result.data || [];
+  } catch {
+    return [];
+  }
+};
+```
+
+---
+
+## Issue #63: Bug - formUrlQuery Type Mismatch Allows null Value
+
+**Priority:** Medium  
+**Labels:** bug, typescript  
+**Affected Files:** `src/lib/url.ts`, `src/components/filters/GlobalFilter.tsx`
+
+### Description
+The `formUrlQuery` function's TypeScript interface declares `value` as `string`, but `GlobalFilter.tsx` passes `null` as the value. This is a type safety violation that TypeScript would catch if build errors weren't suppressed.
+
+### Current Behavior
+```typescript
+// url.ts - declares value as string only
+interface UrlQueryParams {
+  params: string;
+  key: string;
+  value: string; // Does not accept null
+}
+
+// GlobalFilter.tsx - passes null
+newUrl = formUrlQuery({
+  params: searchParams.toString(),
+  key: "type",
+  value: null, // Type error! null is not string
+});
+```
+
+### Expected Behavior
+Either update the type to accept `string | null`:
+```typescript
+interface UrlQueryParams {
+  params: string;
+  key: string;
+  value: string | null;
+}
+```
+Or use `removeKeysFromUrlQuery` instead when clearing a filter value.
+
+---
+
+## Issue #64: Bug - No ObjectId Validation Before MongoDB findById Calls
+
+**Priority:** High  
+**Labels:** bug, error-handling, security  
+**Affected Files:** `src/lib/actions/question.action.ts`, `src/lib/actions/answer.action.ts`, `src/lib/actions/user.action.ts`, `src/lib/actions/tag.action.ts`, `src/app/api/users/[id]/route.ts`, `src/app/api/accounts/[id]/route.ts`
+
+### Description
+All `findById` calls pass user-provided IDs directly from URL params without validating they are valid MongoDB ObjectIds. If a user navigates to `/questions/invalid-id` or `/profile/not-a-real-id`, Mongoose throws a `CastError` that gets caught as a generic 500 error instead of a proper 404.
+
+### Current Behavior
+```typescript
+// If id = "invalid-string", this throws CastError: Cast to ObjectId failed
+const question = await Question.findById(questionId);
+```
+
+### Expected Behavior
+Validate ObjectId format before querying:
+```typescript
+import mongoose from "mongoose";
+
+if (!mongoose.Types.ObjectId.isValid(questionId)) {
+  throw new NotFoundError("Question");
+}
+const question = await Question.findById(questionId);
+```
+
+Or add ObjectId validation to the Zod schemas:
+```typescript
+export const GetQuestionSchema = z.object({
+  questionId: z.string().refine((val) => mongoose.Types.ObjectId.isValid(val), {
+    message: "Invalid question ID",
+  }),
+});
+```
+
+---
+
+## Issue #65: Bug - url.ts Uses window.location Making It Unsafe for SSR
+
+**Priority:** Medium  
+**Labels:** bug, ssr, architecture  
+**Affected Files:** `src/lib/url.ts`
+
+### Description
+The `formUrlQuery` and `removeKeysFromUrlQuery` functions use `window.location.pathname`, which only works in client-side code. While these are currently only used in client components, the utility file has no protection against accidental server-side usage, which would throw a `ReferenceError: window is not defined`.
+
+### Current Behavior
+```typescript
+export const formUrlQuery = ({ params, key, value }: UrlQueryParams) => {
+  const queryString = qs.parse(params);
+  queryString[key] = value;
+  return qs.stringifyUrl({
+    url: window.location.pathname, // Fails during SSR
+    query: queryString,
+  });
+};
+```
+
+### Expected Behavior
+Accept `pathname` as a parameter or add a safety check:
+```typescript
+export const formUrlQuery = ({ params, key, value, pathname }: UrlQueryParams & { pathname?: string }) => {
+  const queryString = qs.parse(params);
+  queryString[key] = value;
+  return qs.stringifyUrl({
+    url: pathname || (typeof window !== 'undefined' ? window.location.pathname : '/'),
+    query: queryString,
+  });
+};
+```
+
+---
+
+## Issue #66: Bug - Unused Geist_Mono Font Import in Root Layout
+
+**Priority:** Low  
+**Labels:** code-quality, cleanup, performance  
+**Affected Files:** `src/app/layout.tsx`
+
+### Description
+The root layout imports `Geist_Mono` from `next/font/google` but never uses it. This causes an unnecessary font download and increases page load time.
+
+### Current Behavior
+```typescript
+import { Geist, Geist_Mono } from "next/font/google";
+// Geist_Mono is never used anywhere
+```
+
+### Expected Behavior
+Remove the unused `Geist_Mono` import. Additionally, `Geist` from google fonts is imported but the layout uses `localFont` for both Inter and Space Grotesk, making `Geist` also potentially unused.
+
+---
+
+## Issue #67: Missing Feature - No Custom 404 (not-found.tsx) Page
+
+**Priority:** Medium  
+**Labels:** ux, missing-feature  
+**Affected Files:** `src/app/` (missing `not-found.tsx`)
+
+### Description
+There's no custom `not-found.tsx` page in the app directory. When users navigate to non-existent routes or when `notFound()` is called (e.g., in the profile page), they see the default Next.js 404 page which doesn't match the application's design system.
+
+### Expected Behavior
+Create a custom `not-found.tsx` that matches the app's styling:
+```typescript
+// src/app/not-found.tsx
+import Image from "next/image";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+
+export default function NotFound() {
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center">
+      <Image src="/images/dark-error.png" ... />
+      <h1>Page Not Found</h1>
+      <p>The page you're looking for doesn't exist.</p>
+      <Link href="/"><Button>Go Home</Button></Link>
+    </div>
+  );
+}
+```
+
+---
+
+## Issue #68: Performance - Excessive JSON.parse(JSON.stringify()) for Serialization
+
+**Priority:** Medium  
+**Labels:** performance, code-quality  
+**Affected Files:** All files in `src/lib/actions/`
+
+### Description
+Every server action uses `JSON.parse(JSON.stringify(data))` to serialize Mongoose documents before returning them. This pattern is used 20+ times across the codebase. While necessary to strip Mongoose metadata, it's inefficient and could be replaced with `.lean()` or a utility function.
+
+### Current Behavior
+```typescript
+return { success: true, data: JSON.parse(JSON.stringify(question)) };
+// Repeated 20+ times across all action files
+```
+
+### Expected Behavior
+1. Use `.lean()` on all Mongoose queries (already done in some places but not all)
+2. Create a utility function to handle serialization:
+```typescript
+// lib/utils.ts
+export function serialize<T>(data: T): T {
+  return JSON.parse(JSON.stringify(data));
+}
+```
+3. Or use Mongoose's `.toJSON()` with proper transform options
+
+---
+
+## Issue #69: Bug - createQuestion Does Not revalidatePath After Creation
+
+**Priority:** Medium  
+**Labels:** bug, caching  
+**Affected Files:** `src/lib/actions/question.action.ts`
+
+### Description
+After creating a new question, `createQuestion` doesn't call `revalidatePath` for the home page or any relevant path. This means the home page's cached question list won't update until the cache expires naturally. Other mutations like `deleteQuestion`, `createAnswer`, and `toggleSaveQuestion` all properly call `revalidatePath`.
+
+### Current Behavior
+```typescript
+export async function createQuestion(params) {
+  // ... creates question ...
+  await session.commitTransaction();
+  return { success: true, data: JSON.parse(JSON.stringify(question)) };
+  // No revalidatePath call!
+}
+```
+
+### Expected Behavior
+```typescript
+await session.commitTransaction();
+revalidatePath("/"); // Revalidate home page
+return { success: true, data: JSON.parse(JSON.stringify(question)) };
+```
+
+---
+
+## Issue #70: Bug - globalSearch Function Has No Return Type Annotation
+
+**Priority:** Low  
+**Labels:** code-quality, typescript  
+**Affected Files:** `src/lib/actions/general.action.ts`
+
+### Description
+The `globalSearch` function is the only exported server action that lacks a proper return type annotation. All other actions have explicit `Promise<ActionResponse<T>>` return types.
+
+### Current Behavior
+```typescript
+export async function globalSearch(params: GlobalSearchParams) {
+  // Return type is inferred, not explicit
+}
+```
+
+### Expected Behavior
+```typescript
+export async function globalSearch(
+  params: GlobalSearchParams
+): Promise<ActionResponse<GlobalSearchedItem[]>> {
+  // ...
+}
+```
+
+---
+
+## Issue #71: Bug - editQuestion Doesn't revalidatePath After Successful Edit
+
+**Priority:** Medium  
+**Labels:** bug, caching  
+**Affected Files:** `src/lib/actions/question.action.ts`
+
+### Description
+After successfully editing a question, the `editQuestion` function doesn't revalidate any paths. The question detail page and home page will show stale data until the cache expires.
+
+### Current Behavior
+```typescript
+export async function editQuestion(params) {
+  // ... edits question ...
+  await session.commitTransaction();
+  return { success: true, data: JSON.parse(JSON.stringify(question)) };
+  // No revalidatePath!
+}
+```
+
+### Expected Behavior
+```typescript
+await session.commitTransaction();
+revalidatePath(ROUTES.QUESTION(questionId));
+revalidatePath("/");
+return { success: true, data: JSON.parse(JSON.stringify(question)) };
+```
+
+---
+
+## Issue #72: Security - Question Detail Page Redirects to /404 Instead of Using notFound()
+
+**Priority:** Low  
+**Labels:** bug, ux  
+**Affected Files:** `src/app/(root)/questions/[id]/page.tsx`
+
+### Description
+When a question is not found, the page calls `redirect("/404")` which redirects to a route that may not exist (there's no `/404` page). It should use Next.js's `notFound()` function which properly triggers the not-found boundary.
+
+### Current Behavior
+```typescript
+if (!success || !question) return redirect("/404");
+```
+
+### Expected Behavior
+```typescript
+import { notFound } from "next/navigation";
+if (!success || !question) return notFound();
+```
+
+---
+
+## Issue #73: Bug - Vote revalidatePath Uses Hardcoded Path Pattern
+
+**Priority:** Low  
+**Labels:** bug, caching  
+**Affected Files:** `src/lib/actions/vote.action.ts`
+
+### Description
+After a vote, `revalidatePath` is called with `/questions/${targetId}`. However, when voting on an answer, `targetId` is the answer ID, not the question ID. This means the question page cache is never actually revalidated after voting on an answer.
+
+### Current Behavior
+```typescript
+revalidatePath(`/questions/${targetId}`);
+// When targetType === "answer", targetId is the answer's ID, not the question's ID
+```
+
+### Expected Behavior
+For answer votes, look up the question ID from the answer document:
+```typescript
+if (targetType === "answer") {
+  revalidatePath(`/questions/${contentDoc.question}`);
+} else {
+  revalidatePath(`/questions/${targetId}`);
+}
+```
+
+---
+
+## Issue #74: Performance - getHotQuestions and getTopTags Call dbConnect Directly But Other Actions Use action() Handler
+
+**Priority:** Low  
+**Labels:** code-quality, inconsistency  
+**Affected Files:** `src/lib/actions/question.action.ts`, `src/lib/actions/tag.actions.ts`
+
+### Description
+`getHotQuestions` and `getTopTags` bypass the centralized `action()` handler and call `dbConnect()` directly. All other server actions use the `action()` handler which provides consistent validation, auth, and db connection. This creates inconsistency and means these functions miss out on any future middleware added to the action handler.
+
+### Current Behavior
+```typescript
+export async function getHotQuestions() {
+  try {
+    await dbConnect(); // Direct call, bypasses action() handler
+    const questions = await Question.find()...
+  }
+}
+```
+
+### Expected Behavior
+Use the action() handler for consistency:
+```typescript
+export async function getHotQuestions() {
+  const validationResult = await action({ params: {}, schema: z.object({}) });
+  if (validationResult instanceof Error) return handleError(validationResult);
+  // ...
+}
+```
+Or at minimum, document why these functions bypass the standard pattern.
+
+---
+
+## Issue #75: Bug - Hardcoded Magic Numbers for Limits Throughout Actions
+
+**Priority:** Low  
+**Labels:** code-quality, maintainability  
+**Affected Files:** `src/lib/actions/question.action.ts`, `src/lib/actions/general.action.ts`, `src/lib/actions/tag.actions.ts`
+
+### Description
+Multiple hardcoded limit values are scattered throughout action files without constants or configuration:
+- `getHotQuestions` uses `.limit(5)`
+- `getTopTags` uses `.limit(5)`
+- `getUserTopTags` uses `$limit: 10`
+- `getRecommendedQuestions` uses `.limit(50)` for interactions
+- `globalSearch` uses `.limit(2)` and `.limit(8)`
+
+### Expected Behavior
+Extract these into named constants:
+```typescript
+// constants/index.ts
+export const LIMITS = {
+  HOT_QUESTIONS: 5,
+  TOP_TAGS: 5,
+  USER_TOP_TAGS: 10,
+  RECOMMENDATION_INTERACTIONS: 50,
+  GLOBAL_SEARCH_PER_TYPE: 2,
+  GLOBAL_SEARCH_FOCUSED: 8,
+};
+```
+
+---
+
+## Issue #76: Bug - .vscode/settings.json Committed to Repository
+
+**Priority:** Low  
+**Labels:** code-quality, configuration  
+**Affected Files:** `.vscode/settings.json`, `.gitignore`
+
+### Description
+The `.vscode/settings.json` file is committed to the repository, imposing editor-specific preferences (formatter, tab width, etc.) on all contributors. While this can be intentional for team standardization, the `files.exclude` section hides `.vscode` itself from the editor, making it hard to notice it exists.
+
+### Expected Behavior
+Either:
+1. Move `.vscode/` to `.gitignore` and let each developer configure their own editor
+2. Or rename to `.vscode/settings.json.recommended` and document it
+3. If intentionally shared, remove the `"**/.vscode": true` from `files.exclude` so developers can see and modify it
+
+---
+
+## Issue #77: Security - Account Passwords Exposed Through GET /api/accounts Endpoint
+
+**Priority:** Critical  
+**Labels:** security, data-exposure  
+**Affected Files:** `src/app/api/accounts/route.ts`, `src/app/api/accounts/[id]/route.ts`
+
+### Description
+The Account model stores hashed passwords, and the GET endpoints return the full account object including the `password` field. Even though passwords are hashed, exposing hashes is a security vulnerability (allows offline brute-force attacks).
+
+### Current Behavior
+```typescript
+// GET /api/accounts - returns ALL fields including password
+const accounts = await Account.find();
+return NextResponse.json({ success: true, data: accounts });
+
+// GET /api/accounts/:id - returns ALL fields including password
+const account = await Account.findById(id);
+return NextResponse.json({ success: true, data: account });
+```
+
+### Expected Behavior
+Exclude sensitive fields from the response:
+```typescript
+const accounts = await Account.find().select("-password");
+// Or
+const account = await Account.findById(id).select("-password");
+```
+
+---
+
+## Issue #78: Bug - fetchHandler Default Timeout of 100 Seconds Is Excessively Long
+
+**Priority:** Low  
+**Labels:** performance, configuration  
+**Affected Files:** `src/lib/handlers/fetch.ts`
+
+### Description
+The `fetchHandler` utility has a default timeout of 100,000ms (100 seconds). This is excessively long for API calls and could leave users waiting without feedback. Most API calls should timeout much sooner.
+
+### Current Behavior
+```typescript
+const { timeout = 100000, ... } = options; // 100 seconds default
+```
+
+### Expected Behavior
+Reduce to a more reasonable default (e.g., 10-15 seconds):
+```typescript
+const { timeout = 15000, ... } = options; // 15 seconds default
+```
+
+---
+
+## Issue #79: Bug - AuthForm Shows "Signin In..." (Double "In") During Submission
+
+**Priority:** Low  
+**Labels:** bug, typo, ui  
+**Affected Files:** `src/components/forms/AuthForm.tsx`
+
+### Description
+The loading text for the sign-in button has a typo: "Signin In..." should be "Signing In...".
+
+### Current Behavior
+```typescript
+{form.formState.isSubmitting
+  ? buttonText === "Sign In"
+    ? "Signin In..."  // Typo: should be "Signing In..."
+    : "Signing Up..."
+  : buttonText}
+```
+
+### Expected Behavior
+```typescript
+? "Signing In..."
+```
+
+---
+
+## Issue #80: Architecture - API Route for Internal Use Only Should Not Be Publicly Accessible
+
+**Priority:** Medium  
+**Labels:** security, architecture  
+**Affected Files:** `src/app/api/auth/signin-with-oauth/route.ts`, `src/app/api/accounts/provider/route.ts`
+
+### Description
+Several API routes are designed to be called only by the server-side auth callbacks (`auth.ts`) but are publicly accessible. The OAuth sign-in route creates/updates users and accounts, while the provider route looks up accounts by provider ID. These should not be callable by arbitrary external clients.
+
+### Current Behavior
+- `POST /api/auth/signin-with-oauth` - Anyone can call this to create users
+- `POST /api/accounts/provider` - Anyone can look up accounts by provider ID
+
+### Expected Behavior
+Either:
+1. Add a shared secret/token validation for internal API calls
+2. Move this logic out of API routes into direct function calls (since auth.ts runs server-side, it can call Mongoose directly)
+3. Add middleware that restricts these endpoints to internal traffic only
+
+---
+
+## Issue #81: Bug - Question Card Shows "asked" Timestamp Twice
+
+**Priority:** Low  
+**Labels:** bug, ui  
+**Affected Files:** `src/components/cards/QuestionCard.tsx`
+
+### Description
+The QuestionCard component shows the timestamp in two places: once on mobile (via `<span className="...flex sm:hidden">`) and once as part of the author Metric. On larger screens, users see "asked X days ago" in the Metric area, but on mobile both the standalone timestamp and the metric area are visible creating redundancy.
+
+### Current Behavior
+```tsx
+<span className="subtle-regular text-dark400_light700 line-clamp-1 flex sm:hidden">
+  {getTimeStamp(createdAt)}
+</span>
+// ...
+<Metric ... title={`• asked ${getTimeStamp(createdAt)}`} titleStyles="max-sm:hidden" />
+```
+
+The mobile span shows just the timestamp without "asked" prefix, and the metric shows "asked" but hides on mobile via `titleStyles="max-sm:hidden"`. The metric `value` (author name) still shows on mobile alongside the standalone timestamp, creating an inconsistent display.
+
+### Expected Behavior
+Review the mobile layout to ensure clean, non-redundant display of timestamps.
+
+---
+
+## Issue #82: Missing Feature - No Input Length Limits on Search Fields (Client-Side)
+
+**Priority:** Low  
+**Labels:** ux, security  
+**Affected Files:** `src/components/search/LocalSearch.tsx`, `src/components/search/GlobalSearch.tsx`
+
+### Description
+Search input fields have no `maxLength` attribute or client-side validation. Users can submit extremely long search strings that get passed to MongoDB regex queries, potentially causing performance issues.
+
+### Current Behavior
+```tsx
+<Input
+  type="text"
+  placeholder="Search anything globally..."
+  value={search}
+  onChange={(e) => { setSearch(e.target.value); ... }}
+  // No maxLength prop
+/>
+```
+
+### Expected Behavior
+Add reasonable length limits:
+```tsx
+<Input maxLength={200} ... />
+```
+And validate on the server side in the search actions.
+
+---
+
+## Issue #83: Bug - Community Error Boundary Has Unstyled Default HTML
+
+**Priority:** Low  
+**Labels:** bug, ui, ux  
+**Affected Files:** `src/app/(root)/community/error.tsx`
+
+### Description
+The only error boundary in the app (`community/error.tsx`) uses plain unstyled HTML elements (`<div>`, `<h2>`, `<button>`) without any Tailwind classes or the app's design system, making it look broken and out of place.
+
+### Current Behavior
+```tsx
+return (
+  <div>
+    <h2>Something went wrong!</h2>
+    <button onClick={() => reset()}>Try again</button>
+  </div>
+);
+```
+
+### Expected Behavior
+Style the error boundary to match the app's design system using existing utility classes and the `StateSkeleton` pattern from DataRenderer.
+
+---
+
+## Issue #84: Bug - UserAvatar Links to Profile Everywhere Including on Profile Page
+
+**Priority:** Low  
+**Labels:** ux  
+**Affected Files:** `src/components/UserAvatar.tsx`
+
+### Description
+The `UserAvatar` component always wraps the avatar in a `<Link>` to the user's profile. This means on the user's own profile page, clicking their large avatar navigates to the same page. It also means in places where the avatar is purely decorative (like the navbar), it's still a link.
+
+### Expected Behavior
+Add an optional `disableLink` prop:
+```typescript
+interface Props {
+  id: string;
+  name: string;
+  imageUrl?: string | null;
+  className?: string;
+  fallbackClassName?: string;
+  disableLink?: boolean;
+}
+```
+
+---
+
+## Issue #85: Performance - Devicon CSS Loaded from External CDN Without Integrity Check
+
+**Priority:** Medium  
+**Labels:** security, performance  
+**Affected Files:** `src/app/layout.tsx`
+
+### Description
+The Devicon CSS is loaded from an external CDN (`cdn.jsdelivr.net`) in the `<head>` without a `integrity` attribute (Subresource Integrity). This makes the app vulnerable to CDN compromise. Additionally, loading from an external CDN means the app depends on a third-party service for proper rendering.
+
+### Current Behavior
+```tsx
+<link
+  rel="stylesheet"
+  type="text/css"
+  href="https://cdn.jsdelivr.net/gh/devicons/devicon@latest/devicon.min.css"
+/>
+```
+
+### Expected Behavior
+Either:
+1. Add SRI (Subresource Integrity) hash attribute
+2. Self-host the Devicon CSS as a local asset
+3. Or at minimum add `crossOrigin="anonymous"` for security
+
+```tsx
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/gh/devicons/devicon@latest/devicon.min.css"
+  integrity="sha384-..."
+  crossOrigin="anonymous"
+/>
+```
